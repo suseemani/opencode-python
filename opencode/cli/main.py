@@ -295,12 +295,14 @@ def agent_info(
         sys.exit(1)
     
     typer.echo(f"Agent: {agent.name}")
-    typer.echo(f"ID: {agent.id}")
-    typer.echo(f"Type: {agent.type.value}")
+    typer.echo(f"Mode: {agent.mode.value}")
     typer.echo(f"Description: {agent.description}")
-    typer.echo(f"Model: {agent.model or 'default'}")
-    typer.echo(f"Temperature: {agent.temperature}")
-    typer.echo(f"Permissions: {', '.join(p.value for p in agent.permissions)}")
+    model_str = f"{agent.model.get('modelID', 'default')}" if agent.model else "default"
+    typer.echo(f"Model: {model_str}")
+    typer.echo(f"Temperature: {agent.temperature or 0.7}")
+    typer.echo(f"Native: {agent.native}")
+    typer.echo(f"Hidden: {agent.hidden}")
+    typer.echo(f"Permissions: {len(agent.permissions)} rules configured")
 
 
 @app.command()
