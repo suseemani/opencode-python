@@ -120,8 +120,9 @@ def run(
         typer.echo("Assistant: ", nl=False)
         
         # Prepare messages for the provider
+        system_prompt = agent_obj.prompt or f"You are {agent_obj.name}. {agent_obj.description}"
         messages = [
-            Message(role="system", content=agent_obj.system_prompt),
+            Message(role="system", content=system_prompt),
             Message(role="user", content=prompt)
         ]
         
@@ -129,7 +130,7 @@ def run(
         request = CompletionRequest(
             model=target_model,
             messages=messages,
-            temperature=agent_obj.temperature,
+            temperature=agent_obj.temperature or 0.7,
             stream=True
         )
         
@@ -272,11 +273,11 @@ def agents() -> None:
     manager = get_manager()
     agents = manager.list_agents()
     
-    typer.echo(f"{'ID':<15} {'Type':<12} {'Name':<20} {'Description'}")
+    typer.echo(f"{'Name':<15} {'Mode':<12} {'Type':<20} {'Description'}")
     typer.echo("-" * 100)
     for agent in agents:
         desc = agent.description[:50] if len(agent.description) > 50 else agent.description
-        typer.echo(f"{agent.id:<15} {agent.type.value:<12} {agent.name:<20} {desc}")
+        typer.echo(f"{agent.name:<15} {agent.mode.value:<12} {agent.mode.value:<20} {desc}")
 
 
 @app.command()
