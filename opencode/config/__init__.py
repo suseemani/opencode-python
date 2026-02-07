@@ -21,6 +21,15 @@ from opencode.config.index import (
     load,
     reload,
 )
+from opencode.config.util import (
+    deep_merge,
+    find_up,
+    load_json_with_env_substitution,
+    load_remote_config,
+    load_remote_configs_from_env,
+    substitute_env_vars,
+    substitute_env_vars_in_config,
+)
 
 __all__ = [
     "Agent",
@@ -39,7 +48,14 @@ __all__ = [
     "Server",
     "Skills",
     "Tui",
+    "deep_merge",
+    "find_up",
     "get",
     "load",
+    "load_json_with_env_substitution",
+    "load_remote_config",
+    "load_remote_configs_from_env",
     "reload",
+    "substitute_env_vars",
+    "substitute_env_vars_in_config",
 ]

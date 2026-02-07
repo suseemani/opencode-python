@@ -6,6 +6,7 @@ from .agent import (
     AgentManager,
     AgentMode,
     AgentType,
+    GeneratedAgent,
     PermissionAction,
     PermissionRule,
     create_build_agent,
@@ -16,10 +17,14 @@ from .agent import (
     create_plan_agent,
     create_summary_agent,
     create_title_agent,
+    generate_agent,
+    generate_agent_sync,
     get_agent,
     get_default_agent,
     get_manager,
     list_agents,
+    load_agents_from_config,
+    load_opencode_config,
 )
 
 __all__ = [
@@ -28,6 +33,7 @@ __all__ = [
     "AgentManager",
     "AgentMode",
     "AgentType",
+    "GeneratedAgent",
     "PermissionAction",
     "PermissionRule",
     "create_build_agent",
@@ -38,8 +44,12 @@ __all__ = [
     "create_plan_agent",
     "create_summary_agent",
     "create_title_agent",
+    "generate_agent",
+    "generate_agent_sync",
     "get_agent",
     "get_default_agent",
     "get_manager",
     "list_agents",
+    "load_agents_from_config",
+    "load_opencode_config",
 ]

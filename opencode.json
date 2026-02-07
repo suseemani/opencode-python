@@ -1,0 +1,15 @@
+{
+  "agent": {
+    "my-custom-agent": {
+      "description": "A custom agent for testing configuration loading",
+      "mode": "subagent",
+      "temperature": 0.5,
+      "prompt": "You are a specialized test agent. Help users with testing tasks.",
+      "permission": {
+        "read": "allow",
+        "bash": "allow",
+        "write": "deny"
+      }
+    }
+  }
+}

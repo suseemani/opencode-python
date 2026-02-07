@@ -66,6 +66,84 @@ def serve(
 
 
 @app.command()
+def web(
+    host: str = typer.Option("0.0.0.0", "--host", "-h", help="Host to bind to"),
+    port: int = typer.Option(8080, "--port", "-p", help="Port to listen on"),
+    no_open: bool = typer.Option(False, "--no-open", help="Don't open browser automatically"),
+) -> None:
+    """Start OpenCode server and open web interface."""
+    import os
+    import socket
+    import webbrowser
+    from pathlib import Path
+    
+    # Check for password warning
+    if not os.environ.get("OPENCODE_SERVER_PASSWORD"):
+        typer.echo(typer.style("!  ", fg=typer.colors.YELLOW, bold=True) + 
+                   "OPENCODE_SERVER_PASSWORD is not set; server is unsecured.")
+    
+    # Start server
+    server = Server(host=host, port=port)
+    
+    # Display banner
+    typer.echo("")
+    typer.echo("   ____                      __         ")
+    typer.echo("  / __ \\____ ___  ________  / /__  _____")
+    typer.echo(" / / / / __ `/ / / / ___/ / / / _ \\/ ___/")
+    typer.echo("/ /_/ / /_/ / /_/ (__  ) /_/ /  __/ /    ")
+    typer.echo("\\____/\\__, /\\__, /____/\\____/\\___/_/     ")
+    typer.echo("      /____//____/                       ")
+    typer.echo("")
+    
+    if host == "0.0.0.0":
+        # Show localhost for local access
+        localhost_url = f"http://localhost:{port}"
+        typer.echo(f"  Local access:       {localhost_url}")
+        
+        # Show network IPs for remote access
+        try:
+            # Get network interfaces
+            import psutil
+            network_ips = []
+            for iface_name, iface_addrs in psutil.net_if_addrs().items():
+                for addr in iface_addrs:
+                    # Skip internal and non-IPv4 addresses
+                    if addr.family == socket.AF_INET and not addr.address.startswith("127."):
+                        # Skip Docker bridge networks (typically 172.x.x.x)
+                        if not addr.address.startswith("172."):
+                            network_ips.append(addr.address)
+            
+            for ip in network_ips:
+                typer.echo(f"  Network access:     http://{ip}:{port}")
+        except ImportError:
+            pass
+        
+        # Open localhost in browser
+        if not no_open:
+            try:
+                webbrowser.open(localhost_url)
+            except Exception:
+                pass
+    else:
+        display_url = f"http://{host}:{port}"
+        typer.echo(f"  Web interface:      {display_url}")
+        if not no_open:
+            try:
+                webbrowser.open(display_url)
+            except Exception:
+                pass
+    
+    typer.echo("")
+    typer.echo("Press Ctrl+C to stop the server")
+    
+    # Run server
+    try:
+        server.run()
+    except KeyboardInterrupt:
+        typer.echo("\nStopping server...")
+
+
+@app.command()
 def version() -> None:
     """Show version information."""
     typer.echo("OpenCode v0.1.0 (Python)")
@@ -76,6 +154,10 @@ def version() -> None:
 def run(
     prompt: str = typer.Argument(..., help="Prompt to send to the AI"),
     agent: str = typer.Option("general", "--agent", "-a", help="Agent to use"),
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="Model to use (e.g., opencode/big-pickle)"),
+    continue_last: bool = typer.Option(False, "--continue", "-c", help="Continue the last session"),
+    session_id: Optional[str] = typer.Option(None, "--session", "-s", help="Session ID to continue"),
+    files: Optional[List[str]] = typer.Option(None, "--file", "-f", help="File(s) to attach to the prompt"),
 ) -> None:
     """Run AI with a prompt using the big-pickle model (no API key required)."""
     
@@ -91,23 +173,81 @@ def run(
             typer.echo(f"Error: Agent '{agent}' not found", err=True)
             sys.exit(1)
         
-        # Get provider
+        # Get provider and model
         provider_manager = get_provider_manager()
-        provider_obj = provider_manager.get("opencode")
-        target_model = "big-pickle"
         
-        # Create session
+        # Parse model if provided
+        target_model = "big-pickle"
+        provider_id = "opencode"
+        if model:
+            if "/" in model:
+                provider_id, target_model = model.split("/", 1)
+            else:
+                target_model = model
+        
+        provider_obj = provider_manager.get(provider_id)
+        if not provider_obj:
+            typer.echo(f"Error: Provider '{provider_id}' not found", err=True)
+            sys.exit(1)
+        
+        # Get session manager
         session_manager = get_session_manager()
-        session = await session_manager.create(
-            project_id="cli",
-            title=f"CLI: {prompt[:50]}...",
-        )
+        
+        # Determine session to use
+        session = None
+        if continue_last:
+            # Get the most recent session
+            sessions = await session_manager.list_sessions("cli")
+            if sessions:
+                session = sessions[0]
+                typer.echo(f"Continuing session: {session.id}")
+            else:
+                typer.echo("No previous session found, creating new session")
+        elif session_id:
+            # Try to get specific session
+            try:
+                sessions = await session_manager.list_sessions("cli")
+                session = next((s for s in sessions if s.id == session_id), None)
+                if session:
+                    typer.echo(f"Continuing session: {session.id}")
+                else:
+                    typer.echo(f"Session '{session_id}' not found, creating new session")
+            except Exception:
+                typer.echo(f"Session '{session_id}' not found, creating new session")
+        
+        # Create new session if needed
+        if not session:
+            session = await session_manager.create(
+                project_id="cli",
+                title=f"CLI: {prompt[:50]}...",
+            )
+        
+        # Read and attach files if provided
+        attached_files = []
+        if files:
+            for file_path in files:
+                path = Path(file_path)
+                if path.exists():
+                    try:
+                        content = path.read_text(encoding="utf-8")
+                        attached_files.append({"path": str(path), "content": content})
+                    except Exception as e:
+                        typer.echo(f"Warning: Could not read file '{file_path}': {e}", err=True)
+                else:
+                    typer.echo(f"Warning: File not found: '{file_path}'", err=True)
+        
+        # Build message content
+        message_content = prompt
+        if attached_files:
+            message_content += "\n\nAttached files:\n"
+            for file_info in attached_files:
+                message_content += f"\n--- {file_info['path']} ---\n{file_info['content']}\n"
         
         # Add user message to session
         await session_manager.add_message(
             session.id,
             MessageRole.USER,
-            [MessagePart(type="text", content=prompt)]
+            [MessagePart(type="text", content=message_content)]
         )
         
         typer.echo(f"Session: {session.id}")
@@ -116,6 +256,8 @@ def run(
         typer.echo(f"Provider: {provider_obj.type}")
         typer.echo("")
         typer.echo("User: " + prompt)
+        if attached_files:
+            typer.echo(f"Attached {len(attached_files)} file(s)")
         typer.echo("")
         typer.echo("Assistant: ", nl=False)
         
@@ -123,7 +265,7 @@ def run(
         system_prompt = agent_obj.prompt or f"You are {agent_obj.name}. {agent_obj.description}"
         messages = [
             Message(role="system", content=system_prompt),
-            Message(role="user", content=prompt)
+            Message(role="user", content=message_content)
         ]
         
         # Create completion request
@@ -265,8 +407,12 @@ def models(
             typer.echo(f"{model.provider}/{model.id:<50} {model.name}")
 
 
-@app.command()
-def agents() -> None:
+# Agent commands
+agent_app = typer.Typer(help="Manage agents")
+
+
+@agent_app.command("list")
+def agent_list() -> None:
     """List available agents."""
     from opencode.agent import get_manager
     
@@ -280,7 +426,7 @@ def agents() -> None:
         typer.echo(f"{agent.name:<15} {agent.mode.value:<12} {agent.mode.value:<20} {desc}")
 
 
-@app.command()
+@agent_app.command("info")
 def agent_info(
     agent_id: str = typer.Argument(..., help="Agent ID to show info for"),
 ) -> None:
@@ -303,6 +449,128 @@ def agent_info(
     typer.echo(f"Native: {agent.native}")
     typer.echo(f"Hidden: {agent.hidden}")
     typer.echo(f"Permissions: {len(agent.permissions)} rules configured")
+
+
+@agent_app.command("create")
+def agent_create(
+    name: str = typer.Argument(..., help="Agent name/identifier"),
+    description: str = typer.Option(None, "--description", "-d", help="Agent description (required unless using --ai)"),
+    mode: str = typer.Option("primary", "--mode", "-m", help="Agent mode: primary, subagent, or all"),
+    tools: Optional[str] = typer.Option(None, "--tools", "-t", help="Comma-separated list of tools to enable (default: all)"),
+    model: Optional[str] = typer.Option(None, "--model", help="Model to use (provider/model format)"),
+    prompt: Optional[str] = typer.Option(None, "--prompt", "-p", help="System prompt for the agent"),
+    use_ai: bool = typer.Option(False, "--ai", help="Use AI to generate agent configuration"),
+) -> None:
+    """Create a new custom agent. With --ai, generates agent using AI based on description."""
+    from opencode.agent import (
+        get_manager, AgentInfo, AgentMode, PermissionAction, PermissionRule,
+        generate_agent_sync, GeneratedAgent
+    )
+    
+    manager = get_manager()
+    
+    # Use AI generation if requested
+    if use_ai:
+        if not description:
+            typer.echo("Error: --description is required when using --ai", err=True)
+            sys.exit(1)
+        
+        typer.echo("Generating agent configuration using AI...")
+        try:
+            # Parse model config for generation
+            model_config = None
+            if model:
+                if "/" in model:
+                    provider_id, model_id = model.split("/", 1)
+                    model_config = {"providerID": provider_id, "modelID": model_id}
+                else:
+                    model_config = {"providerID": "opencode", "modelID": model}
+            
+            generated = generate_agent_sync(description, model_config)
+            
+            typer.echo(f"Generated agent: {generated.identifier}")
+            typer.echo(f"When to use: {generated.whenToUse}")
+            
+            # Create agent from generated configuration
+            agent = AgentInfo(
+                name=name,
+                description=generated.whenToUse,
+                mode=AgentMode(mode.lower()) if mode else AgentMode.PRIMARY,
+                native=False,
+                permissions=[PermissionRule(permission="*", pattern="*", action=PermissionAction.ALLOW)],
+                prompt=generated.systemPrompt,
+                model=model_config,
+            )
+            
+            manager.register(agent)
+            typer.echo(f"\nCreated agent: {name}")
+            typer.echo(f"Mode: {mode}")
+            return
+            
+        except Exception as e:
+            typer.echo(f"Error generating agent: {e}", err=True)
+            sys.exit(1)
+    
+    # Manual agent creation (existing logic)
+    if not description:
+        typer.echo("Error: --description is required (or use --ai to generate)", err=True)
+        sys.exit(1)
+    
+    # Validate mode
+    try:
+        agent_mode = AgentMode(mode.lower())
+    except ValueError:
+        typer.echo(f"Invalid mode: {mode}. Must be one of: primary, subagent, all", err=True)
+        sys.exit(1)
+    
+    # Parse tools
+    enabled_tools = None
+    if tools:
+        enabled_tools = [t.strip() for t in tools.split(",")]
+    
+    # Build permissions
+    permissions = []
+    if enabled_tools:
+        # Deny all tools by default
+        permissions.append(PermissionRule(permission="*", pattern="*", action=PermissionAction.DENY))
+        # Allow specified tools
+        for tool in enabled_tools:
+            permissions.append(PermissionRule(permission=tool, pattern="*", action=PermissionAction.ALLOW))
+    else:
+        # Allow all tools
+        permissions.append(PermissionRule(permission="*", pattern="*", action=PermissionAction.ALLOW))
+    
+    # Parse model if provided
+    model_config = None
+    if model:
+        if "/" in model:
+            provider_id, model_id = model.split("/", 1)
+            model_config = {"providerID": provider_id, "modelID": model_id}
+        else:
+            model_config = {"providerID": "opencode", "modelID": model}
+    
+    # Create agent
+    agent = AgentInfo(
+        name=name,
+        description=description,
+        mode=agent_mode,
+        native=False,
+        permissions=permissions,
+        model=model_config,
+        prompt=prompt,
+    )
+    
+    manager.register(agent)
+    typer.echo(f"Created agent: {name}")
+    typer.echo(f"Mode: {mode}")
+    typer.echo(f"Description: {description}")
+    if enabled_tools:
+        typer.echo(f"Tools: {', '.join(enabled_tools)}")
+    else:
+        typer.echo("Tools: all enabled")
+
+
+app.add_typer(agent_app, name="agent")
 
 
 @app.command()
@@ -470,6 +738,100 @@ def config() -> None:
     typer.echo(f"Cache directory:   {paths.cache}")
     typer.echo(f"State directory:   {paths.state}")
     typer.echo(f"Log directory:     {paths.log}")
+
+
+# Auth commands
+auth_app = typer.Typer(help="Manage authentication credentials")
+
+
+@auth_app.command("set")
+def auth_set(
+    provider: str = typer.Argument(..., help="Provider ID (e.g., openai, anthropic)"),
+    api_key: str = typer.Argument(..., help="API key"),
+    base_url: Optional[str] = typer.Option(None, "--base-url", help="Custom base URL (optional)"),
+    organization: Optional[str] = typer.Option(None, "--org", help="Organization ID (optional)"),
+) -> None:
+    """Set API credentials for a provider."""
+    from opencode.cli.auth import get_manager, SUPPORTED_PROVIDERS
+    
+    manager = get_manager()
+    
+    # Validate provider
+    provider_names = {p[0]: p[1] for p in SUPPORTED_PROVIDERS}
+    if provider not in provider_names:
+        typer.echo(f"Warning: '{provider}' is not a standard provider", err=True)
+        typer.echo("Supported providers:", err=True)
+        for pid, pname, url in SUPPORTED_PROVIDERS:
+            typer.echo(f"  - {pid}: {pname}", err=True)
+    
+    manager.set_credentials(provider, api_key, base_url, organization)
+    typer.echo(f"Credentials set for provider: {provider}")
+
+
+@auth_app.command("get")
+def auth_get(
+    provider: str = typer.Argument(..., help="Provider ID"),
+) -> None:
+    """Show credentials for a provider (API key masked)."""
+    from opencode.cli.auth import get_manager
+    
+    manager = get_manager()
+    creds = manager.get_credentials(provider)
+    
+    if not creds:
+        typer.echo(f"No credentials found for provider: {provider}")
+        return
+    
+    typer.echo(f"Provider: {creds.provider}")
+    typer.echo(f"API Key: {creds.api_key[:8]}...{creds.api_key[-4:]}")
+    if creds.base_url:
+        typer.echo(f"Base URL: {creds.base_url}")
+    if creds.organization:
+        typer.echo(f"Organization: {creds.organization}")
+
+
+@auth_app.command("list")
+def auth_list() -> None:
+    """List all providers with stored credentials."""
+    from opencode.cli.auth import get_manager
+    
+    manager = get_manager()
+    providers = manager.list_providers()
+    
+    if not providers:
+        typer.echo("No credentials stored")
+        return
+    
+    typer.echo("Configured providers:")
+    for provider in providers:
+        creds = manager.get_credentials(provider)
+        masked_key = f"{creds.api_key[:8]}...{creds.api_key[-4:]}" if len(creds.api_key) > 12 else "***"
+        typer.echo(f"  - {provider}: {masked_key}")
+
+
+@auth_app.command("remove")
+def auth_remove(
+    provider: str = typer.Argument(..., help="Provider ID"),
+    force: bool = typer.Option(False, "--force", help="Skip confirmation"),
+) -> None:
+    """Remove credentials for a provider."""
+    from opencode.cli.auth import get_manager
+    
+    manager = get_manager()
+    
+    if not force:
+        confirm = typer.confirm(f"Remove credentials for '{provider}'?")
+        if not confirm:
+            typer.echo("Cancelled")
+            return
+    
+    if manager.remove_credentials(provider):
+        typer.echo(f"Credentials removed for provider: {provider}")
+    else:
+        typer.echo(f"No credentials found for provider: {provider}")
+
+
+app.add_typer(auth_app, name="auth")
 
 
 def cli_run() -> None:

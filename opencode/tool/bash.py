@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import Field
 
 from opencode.tool import Tool, ToolContext, ToolDefinition, ToolParameter
+from opencode.tool.truncation import truncate_output
 from opencode.util import create as create_logger
 
 log = create_logger({"service": "tool", "tool": "bash"})
@@ -94,17 +95,16 @@ class BashTool(Tool):
             stdout = stdout_bytes.decode("utf-8", errors="replace")
             stderr = stderr_bytes.decode("utf-8", errors="replace")
 
-            # Truncate output if too long
-            max_output = 10000
-            if len(stdout) > max_output:
-                stdout = stdout[:max_output] + f"\n... ({len(stdout) - max_output} more characters)"
-            if len(stderr) > max_output:
-                stderr = stderr[:max_output] + f"\n... ({len(stderr) - max_output} more characters)"
+            # Apply advanced truncation
+            stdout_result = await truncate_output(stdout)
+            stderr_result = await truncate_output(stderr)
 
             return {
-                "stdout": stdout,
-                "stderr": stderr,
+                "stdout": stdout_result.content,
+                "stderr": stderr_result.content,
                 "exit_code": process.returncode or 0,
+                "truncated": stdout_result.truncated or stderr_result.truncated,
+                "output_path": stdout_result.output_path or stderr_result.output_path,
             }
 
         except Exception as e:

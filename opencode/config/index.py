@@ -201,44 +201,106 @@ async def get() -> ConfigInfo:
 
 
 async def load() -> ConfigInfo:
-    """Load configuration from various sources."""
+    """Load configuration from various sources.
+    
+    Loading order (low -> high precedence):
+    1. Remote config (.well-known/opencode)
+    2. Global config (~/.config/opencode/)
+    3. Project config (searched up from cwd)
+    4. .opencode directory configs
+    5. Custom config (OPENCODE_CONFIG)
+    6. Inline config (OPENCODE_CONFIG_CONTENT)
+    """
     from opencode.global_path import get_paths
     from opencode.util import filesystem
-    import json
+    from opencode.config.util import (
+        find_up, 
+        deep_merge, 
+        load_json_with_env_substitution,
+        substitute_env_vars_in_config,
+        load_remote_configs_from_env
+    )
     
     paths = get_paths()
     result: dict[str, Any] = {}
     
-    # Load global config
+    # 1. Load remote config (lowest precedence)
+    try:
+        remote_config = await load_remote_configs_from_env()
+        if remote_config:
+            result = deep_merge(result, remote_config)
+    except Exception:
+        pass
+    
+    # 2. Load global config
     for filename in ["config.json", "opencode.json", "opencode.jsonc"]:
         config_path = paths.config / filename
         if await filesystem.exists(config_path):
             try:
-                content = await filesystem.read_file(config_path)
-                # Remove comments for jsonc
-                if filename.endswith(".jsonc"):
-                    lines = content.split("\n")
-                    content = "\n".join(line for line in lines if not line.strip().startswith("//"))
-                data = json.loads(content)
-                result.update(data)
+                data = load_json_with_env_substitution(config_path)
+                result = deep_merge(result, data)
             except Exception:
                 pass
     
-    # Load project config
+    # 2. Load project config (search up from cwd)
+    # Find git root to stop at
+    git_root = None
     cwd = Path.cwd()
-    for filename in ["opencode.jsonc", "opencode.json"]:
-        config_path = cwd / filename
-        if await filesystem.exists(config_path):
+    current = cwd
+    while current != current.parent:
+        if (current / ".git").exists():
+            git_root = current
+            break
+        current = current.parent
+    
+    # Search up directory tree for config files
+    config_files = find_up(["opencode.jsonc", "opencode.json"], cwd, git_root)
+    # Reverse to load from farthest to closest (proper precedence)
+    for config_path in reversed(config_files):
+        try:
+            data = load_json_with_env_substitution(config_path)
+            result = deep_merge(result, data)
+        except Exception:
+            pass
+    
+    # 3. Load .opencode directory configs
+    opencode_dirs = find_up([".opencode"], cwd, git_root)
+    # Also check home directory
+    home_opencode = Path.home() / ".opencode"
+    if home_opencode.exists():
+        opencode_dirs.append(home_opencode)
+    
+    for opencode_dir in reversed(opencode_dirs):
+        for filename in ["opencode.jsonc", "opencode.json"]:
+            config_path = opencode_dir / filename
+            if config_path.exists():
+                try:
+                    data = load_json_with_env_substitution(config_path)
+                    result = deep_merge(result, data)
+                except Exception:
+                    pass
+    
+    # 4. Handle OPENCODE_CONFIG environment variable (custom config path)
+    custom_config = os.environ.get("OPENCODE_CONFIG")
+    if custom_config:
+        config_path = Path(custom_config)
+        if config_path.exists():
             try:
-                content = await filesystem.read_file(config_path)
-                if filename.endswith(".jsonc"):
-                    lines = content.split("\n")
-                    content = "\n".join(line for line in lines if not line.strip().startswith("//"))
-                data = json.loads(content)
-                result.update(data)
+                data = load_json_with_env_substitution(config_path)
+                result = deep_merge(result, data)
             except Exception:
                 pass
-            break
+    
+    # 5. Handle OPENCODE_CONFIG_CONTENT (inline config)
+    inline_config = os.environ.get("OPENCODE_CONFIG_CONTENT")
+    if inline_config:
+        try:
+            import json
+            data = json.loads(inline_config)
+            data = substitute_env_vars_in_config(data)
+            result = deep_merge(result, data)
+        except Exception:
+            pass
     
     # Set defaults
     if not result.get("username"):
