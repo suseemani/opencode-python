@@ -1,11 +1,11 @@
 """Web search tool for OpenCode."""
 
+import json
 from typing import Any
-
-import httpx
 
 from opencode.tool import Tool, ToolContext, ToolDefinition, ToolParameter
 from opencode.util import create as create_logger
+from opencode.util.http import create_http_client
 
 log = create_logger({"service": "tool", "tool": "websearch"})
 
@@ -86,7 +86,7 @@ class WebSearchTool(Tool):
                 },
             }
 
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with create_http_client(timeout=30.0) as client:
                 response = await client.post(
                     "https://mcp.exa.ai/mcp",
                     json=request_data,
@@ -106,7 +106,6 @@ class WebSearchTool(Tool):
                 for item in content:
                     if item.get("type") == "text":
                         try:
-                            import json
                             search_results = json.loads(item.get("text", "[]"))
                             results.extend(search_results)
                         except json.JSONDecodeError:

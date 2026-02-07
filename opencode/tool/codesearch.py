@@ -1,11 +1,11 @@
 """Code search tool for OpenCode."""
 
+import json
 from typing import Any
-
-import httpx
 
 from opencode.tool import Tool, ToolContext, ToolDefinition, ToolParameter
 from opencode.util import create as create_logger
+from opencode.util.http import create_http_client
 
 log = create_logger({"service": "tool", "tool": "codesearch"})
 
@@ -70,7 +70,7 @@ class CodeSearchTool(Tool):
                 },
             }
 
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with create_http_client(timeout=30.0) as client:
                 response = await client.post(
                     "https://mcp.exa.ai/mcp",
                     json=request_data,
@@ -86,8 +86,6 @@ class CodeSearchTool(Tool):
                 # Parse SSE response
                 for line in response_text.split("\n"):
                     if line.startswith("data: "):
-                        import json
-
                         data = json.loads(line[6:])
                         result = data.get("result", {})
                         content = result.get("content", [])

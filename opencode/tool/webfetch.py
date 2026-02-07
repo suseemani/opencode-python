@@ -6,6 +6,7 @@ import httpx
 
 from opencode.tool import Tool, ToolContext, ToolDefinition, ToolParameter
 from opencode.util import create as create_logger
+from opencode.util.http import create_http_client
 
 log = create_logger({"service": "tool", "tool": "webfetch"})
 
@@ -55,7 +56,7 @@ class WebFetchTool(Tool):
         log.info("Fetching URL", {"url": url})
 
         try:
-            async with httpx.AsyncClient(timeout=timeout / 1000, follow_redirects=True) as client:
+            async with create_http_client(timeout=timeout / 1000, follow_redirects=True) as client:
                 response = await client.get(url)
                 response.raise_for_status()
 

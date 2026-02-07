@@ -8,6 +8,8 @@ from typing import Any, AsyncIterator
 import httpx
 from pydantic import BaseModel, Field
 
+from opencode.util.http import get_proxy_config, should_use_proxy
+
 
 class Model(BaseModel):
     """An AI model definition."""
@@ -140,12 +142,33 @@ class OpenCodeProvider:
             if self.api_key:
                 headers["Authorization"] = f"Bearer {self.api_key}"
             
-            self._client = httpx.AsyncClient(
-                base_url=self.base_url,
-                headers=headers,
-                timeout=120.0,
-                follow_redirects=True,
-            )
+            # Get proxy configuration from environment
+            proxy_config = get_proxy_config()
+            
+            client_kwargs = {
+                "base_url": self.base_url,
+                "headers": headers,
+                "timeout": 120.0,
+                "follow_redirects": True,
+            }
+            
+            # Add proxy if configured
+            if proxy_config:
+                # Remove no_proxy from proxy_config as it's handled separately
+                no_proxy_hosts = proxy_config.pop("no_proxy", None)
+                
+                if proxy_config:
+                    # Check if base_url is in no_proxy list
+                    if should_use_proxy(self.base_url, no_proxy_hosts):
+                        # Use the HTTPS proxy if available, otherwise HTTP proxy
+                        proxy_url = proxy_config.get("https://") or proxy_config.get("http://")
+                        if proxy_url:
+                            client_kwargs["proxy"] = proxy_url
+                            print(f"[OpenCodeProvider] Using proxy: {proxy_url}")
+                    else:
+                        print(f"[OpenCodeProvider] Proxy configured but {self.base_url} is in NO_PROXY")
+            
+            self._client = httpx.AsyncClient(**client_kwargs)
         return self._client
     
     async def complete(self, request: CompletionRequest) -> AsyncIterator[CompletionChunk]:
